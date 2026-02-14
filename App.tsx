@@ -1,289 +1,337 @@
-import React, { useState, useEffect } from 'react';
-import { Terminal, FolderTree, Upload, Calculator, Download, AlertTriangle, CheckCircle, FileText, Activity, Info } from 'lucide-react';
-import { calculate, FinishLevel } from './services/costService';
+import React, { useState, useRef, useEffect } from 'react';
+import { Terminal, FolderTree, Calculator, Download, FileText, Activity, Info, CheckCircle, Send, Bot, User, Grid } from 'lucide-react';
+import { calculate, FinishLevel, BudgetResult } from './services/costService';
 import { generateProjectZip } from './services/zipService';
-import { SIENNA_STRUCTURE } from './data/structure';
+import { getDynamicStructure } from './data/structure';
 
 type Phase = 'INIT' | 'STRUCTURE' | 'COST' | 'EXECUTION';
 
+interface ChatMessage {
+  role: 'bot' | 'user';
+  text: string;
+}
+
 const App = () => {
   const [phase, setPhase] = useState<Phase>('INIT');
-  const [projectData, setProjectData] = useState({ name: '', city: '', type: '' });
-  const [uploadedFiles, setUploadedFiles] = useState<Record<string, File>>({});
+  
+  // Project State
+  const [projectData, setProjectData] = useState({ name: '', city: '', type: 'General' });
+  const [generatedStructure, setGeneratedStructure] = useState<any>(null);
+  
+  // Cost State
   const [costParams, setCostParams] = useState<{ area: number; finishes: FinishLevel }>({ area: 0, finishes: 'Medio' });
-  const [costResult, setCostResult] = useState<any>(null);
+  const [costResult, setCostResult] = useState<BudgetResult | null>(null);
   const [logs, setLogs] = useState<string[]>(["SIENNA OS v3.0 iniciado..."]);
+
+  // Chatbot State (Init Phase)
+  const [initChatHistory, setInitChatHistory] = useState<ChatMessage[]>([
+    { role: 'bot', text: 'Bienvenido a SIENNA OS. Soy tu arquitecto asistente. ¿Cómo se llamará tu nuevo proyecto y dónde se ubicará? (Ej. "Casa Las Lomas en CDMX")' }
+  ]);
+  const [initChatInput, setInitChatInput] = useState("");
+  const initChatEndRef = useRef<HTMLDivElement>(null);
+
+  // Chatbot State (Cost Phase)
+  const [costChatHistory, setCostChatHistory] = useState<ChatMessage[]>([
+    { role: 'bot', text: 'Ahora definamos los costos. ¿Tienes alguna preferencia de materiales? (Ej: Pisos de mármol, muros de block, etc.)' }
+  ]);
+  const [costChatInput, setCostChatInput] = useState("");
+  const costChatEndRef = useRef<HTMLDivElement>(null);
 
   const addLog = (msg: string) => setLogs(prev => [...prev, `> ${msg}`]);
 
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files) {
-      const newFiles = { ...uploadedFiles };
-      Array.from(e.target.files).forEach((file: File) => {
-        newFiles[file.name] = file;
-        addLog(`Archivo cargado: ${file.name}`);
-      });
-      setUploadedFiles(newFiles);
-    }
+  // Scroll logic
+  useEffect(() => { initChatEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [initChatHistory]);
+  useEffect(() => { costChatEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [costChatHistory]);
+
+  // --- INIT CHAT LOGIC ---
+  const handleSendInitMessage = () => {
+    if (!initChatInput.trim()) return;
+    const userMsg = initChatInput;
+    setInitChatHistory(prev => [...prev, { role: 'user', text: userMsg }]);
+    setInitChatInput("");
+
+    // Simulated NLP for Init
+    setTimeout(() => {
+        let botReply = "¿Podrías darme más detalles? ¿Es obra nueva, remodelación o proyecto público?";
+        const lowerMsg = userMsg.toLowerCase();
+        
+        // Extract Name/City rudimentarily if not set
+        if (!projectData.name) {
+           // Assume first capitalized words might be name, or just take the whole string if short
+           if (lowerMsg.includes("casa") || lowerMsg.includes("torre") || lowerMsg.includes("proyecto")) {
+               setProjectData(prev => ({ ...prev, name: userMsg.split(' ')[0] + "_" + Math.floor(Math.random()*100) })); 
+           }
+        }
+
+        // Logic branching
+        if (lowerMsg.includes("remodelación") || lowerMsg.includes("remodelacion")) {
+             setProjectData(prev => ({ ...prev, type: 'Remodelación' }));
+             botReply = "Entendido, configuraré la estructura para una REMODELACIÓN. Se añadirán carpetas para levantamientos críticos y demoliciones.";
+        } else if (lowerMsg.includes("pública") || lowerMsg.includes("publica") || lowerMsg.includes("gobierno")) {
+             setProjectData(prev => ({ ...prev, type: 'Obra Pública' }));
+             botReply = "Configurando entorno para OBRA PÚBLICA. Se añadirán carpetas para Licitación, Bitácora Electrónica y Normativa aplicable.";
+        } else if (lowerMsg.includes("casa") || lowerMsg.includes("departamento")) {
+             setProjectData(prev => ({ ...prev, type: 'Residencial' }));
+             botReply = "Perfecto, un proyecto Residencial. ¿Cuántos metros cuadrados aproximados estimas?";
+        } else if (lowerMsg.includes("m2") || !isNaN(Number(userMsg))) {
+             // Try to catch area in this chat
+             const numbers = userMsg.match(/\d+/);
+             if (numbers) {
+                 setCostParams(prev => ({...prev, area: Number(numbers[0])}));
+                 botReply = `Registrado ${numbers[0]} m². Puedes inicializar el proyecto cuando estés listo.`;
+             }
+        }
+        
+        setInitChatHistory(prev => [...prev, { role: 'bot', text: botReply }]);
+    }, 600);
+  };
+
+  const finalizeInit = () => {
+     if (!projectData.name) {
+         setProjectData(prev => ({ ...prev, name: "PROYECTO_SIN_NOMBRE" }));
+     }
+     // Generate context string for structure generator
+     const context = `${projectData.type} ${initChatHistory.map(m => m.text).join(' ')}`;
+     const struct = getDynamicStructure(context);
+     setGeneratedStructure(struct);
+     addLog(`Estructura generada para: ${projectData.type}`);
+     setPhase('STRUCTURE');
+  };
+
+  // --- COST CHAT LOGIC ---
+  const handleSendCostMessage = () => {
+    if (!costChatInput.trim()) return;
+    const userMsg = costChatInput;
+    setCostChatHistory(prev => [...prev, { role: 'user', text: userMsg }]);
+    setCostChatInput("");
+
+    setTimeout(() => {
+        let botReply = "Entendido, anotado.";
+        const lowerMsg = userMsg.toLowerCase();
+        if (lowerMsg.includes("marmol") || lowerMsg.includes("mármol")) botReply = "He actualizado ACABADOS: Mármol Travertino.";
+        else if (lowerMsg.includes("madera") || lowerMsg.includes("laminado")) botReply = "Perfecto, piso laminado tipo madera considerado.";
+        else if (lowerMsg.includes("block")) botReply = "Ajustando estructura para Block de concreto.";
+        
+        setCostChatHistory(prev => [...prev, { role: 'bot', text: botReply }]);
+    }, 600);
   };
 
   const executeCostCalculation = () => {
-    addLog(`Calculando costo paramétrico para ${costParams.area}m² - ${costParams.finishes}...`);
-    const result = calculate(costParams.area, costParams.finishes);
+    const fullContext = costChatHistory.filter(m => m.role === 'user').map(m => m.text).join(" ");
+    addLog(`Calculando presupuesto para ${costParams.area}m²...`);
+    const result = calculate(costParams.area, costParams.finishes, fullContext);
     setCostResult(result);
-    addLog(`Estimación completa. Total: $${result.total.toLocaleString('es-MX')}`);
+    addLog(`Total estimado: $${result.total.toLocaleString('es-MX')}`);
   };
 
   const executeZipGeneration = async () => {
-    addLog("Inicializando estructura de archivos del sistema...");
-    addLog("Mapeando plantillas...");
+    addLog("Generando ZIP...");
     try {
-      await generateProjectZip(projectData.name || "Proyecto_Sienna", costResult, uploadedFiles);
-      addLog("ÉXITO: Expediente generado y descargado.");
+      await generateProjectZip(projectData.name || "Proyecto_Sienna", generatedStructure, costResult!, {});
+      addLog("Descarga iniciada.");
     } catch (error) {
-      addLog("ERROR: Falló la generación del zip.");
+      addLog("ERROR en generación.");
       console.error(error);
     }
   };
 
   return (
-    <div className="min-h-screen bg-slate-900 text-slate-200 p-4 md:p-8 flex flex-col md:flex-row gap-6">
+    <div className="min-h-screen bg-slate-900 text-slate-200 p-2 md:p-6 flex flex-col md:flex-row gap-4">
       
-      {/* Sidebar / Status Panel */}
-      <div className="w-full md:w-1/4 flex flex-col gap-6">
-        <div className="bg-slate-800 p-6 rounded-lg border border-slate-700 shadow-xl">
+      {/* Sidebar */}
+      <div className="w-full md:w-1/4 flex flex-col gap-4">
+        <div className="bg-slate-800 p-5 rounded-lg border border-slate-700 shadow-xl">
           <div className="flex items-center gap-3 mb-4">
             <Activity className="text-emerald-400 animate-pulse" />
-            <h1 className="text-2xl font-bold text-white tracking-tighter">SIENNA OS</h1>
+            <h1 className="text-xl font-bold text-white tracking-tighter">SIENNA OS</h1>
           </div>
-          <div className="text-xs text-slate-400 mb-6 font-mono">v3.0 | SISTEMA OPERATIVO</div>
+          <div className="text-xs text-slate-400 mb-6 font-mono">v3.2 | SISTEMA INTELIGENTE</div>
           
-          <div className="space-y-4">
-            <PhaseIndicator active={phase === 'INIT'} label="01. INICIALIZACIÓN" />
-            <PhaseIndicator active={phase === 'STRUCTURE'} label="02. ESTRUCTURA" />
-            <PhaseIndicator active={phase === 'COST'} label="03. COSTO PARAMÉTRICO" />
-            <PhaseIndicator active={phase === 'EXECUTION'} label="04. EJECUCIÓN" />
+          <div className="space-y-2">
+            {(['INIT', 'STRUCTURE', 'COST', 'EXECUTION'] as Phase[]).map((p, idx) => (
+                <button key={p} onClick={() => setPhase(p)} className="w-full text-left hover:bg-slate-800/50 p-2 rounded transition-colors">
+                    <PhaseIndicator active={phase === p} label={`0${idx+1}. ${p === 'INIT' ? 'INICIALIZACIÓN' : p === 'COST' ? 'PRESUPUESTO' : p === 'STRUCTURE' ? 'ESTRUCTURA' : 'EJECUCIÓN'}`} />
+                </button>
+            ))}
           </div>
         </div>
 
-        {/* Terminal Log */}
-        <div className="bg-black/50 p-4 rounded-lg border border-slate-700 font-mono text-xs h-64 overflow-y-auto flex-grow">
-          {logs.map((log, i) => (
-            <div key={i} className="mb-1 text-emerald-500/80">{log}</div>
-          ))}
+        {/* Console */}
+        <div className="bg-black/60 p-4 rounded-lg border border-slate-700 font-mono text-xs h-48 md:h-auto md:flex-grow overflow-y-auto shadow-inner">
+          {logs.map((log, i) => <div key={i} className="mb-1 text-emerald-500/80 break-words">{log}</div>)}
           <div className="animate-pulse">_</div>
         </div>
       </div>
 
-      {/* Main Content Area */}
-      <div className="w-full md:w-3/4 bg-slate-800 rounded-lg border border-slate-700 shadow-2xl p-6 md:p-10 flex flex-col">
+      {/* Main Content */}
+      <div className="w-full md:w-3/4 bg-slate-800 rounded-lg border border-slate-700 shadow-2xl p-4 md:p-8 flex flex-col min-h-[600px]">
         
+        {/* PHASE 1: INITIALIZATION WITH CHAT */}
         {phase === 'INIT' && (
-          <div className="animate-in fade-in slide-in-from-bottom-4 duration-500 space-y-6">
+          <div className="animate-in fade-in slide-in-from-bottom-4 duration-500 h-full flex flex-col md:flex-row gap-6">
             
-            <div className="bg-slate-700/50 p-4 rounded-lg border border-slate-600 mb-4">
-              <h3 className="text-white font-bold flex items-center gap-2 mb-2">
-                <Info size={18} className="text-blue-400"/> Bienvenido a SIENNA OS
-              </h3>
-              <p className="text-sm text-slate-300 leading-relaxed">
-                Este sistema centralizado gestiona el ciclo de vida de proyectos arquitectónicos. 
-                A través de este flujo de trabajo, podrás estructurar automáticamente tus carpetas, 
-                integrar archivos plantilla y realizar estimaciones de costos paramétricas para generar 
-                un expediente de proyecto completo y estandarizado.
-              </p>
+            {/* Left: Live Data Preview */}
+            <div className="w-full md:w-1/3 flex flex-col gap-4">
+               <h3 className="text-white font-bold flex items-center gap-2"><Info size={18} className="text-blue-400"/> Datos del Proyecto</h3>
+               <div className="bg-slate-700/30 p-4 rounded-lg border border-slate-600 text-sm space-y-3">
+                  <div>
+                      <span className="text-slate-400 block text-xs uppercase">Nombre</span>
+                      <input value={projectData.name} onChange={e => setProjectData({...projectData, name: e.target.value})} className="bg-transparent border-b border-slate-500 w-full text-white focus:border-emerald-500 outline-none pb-1" placeholder="Pendiente..."/>
+                  </div>
+                  <div>
+                      <span className="text-slate-400 block text-xs uppercase">Tipo</span>
+                      <div className="text-emerald-400 font-bold">{projectData.type}</div>
+                  </div>
+                  {costParams.area > 0 && (
+                      <div>
+                          <span className="text-slate-400 block text-xs uppercase">Área Estimada</span>
+                          <div className="text-white">{costParams.area} m²</div>
+                      </div>
+                  )}
+               </div>
+               <div className="bg-slate-700/30 p-4 rounded-lg border border-slate-600">
+                   <p className="text-xs text-slate-400 mb-2">El sistema detectará el tipo de obra y ajustará las carpetas automáticamente.</p>
+               </div>
+               <button onClick={finalizeInit} className="mt-auto bg-emerald-600 hover:bg-emerald-500 text-white px-6 py-3 rounded font-bold transition-all flex items-center justify-center gap-2">
+                 Inicializar <Terminal size={18} />
+               </button>
             </div>
 
-            <div className="bg-blue-500/10 border border-blue-500/50 p-4 rounded text-blue-200 flex items-start gap-3">
-              <AlertTriangle className="shrink-0" />
-              <p className="text-sm">
-                <strong>Nota:</strong> Se recomienda subir sus archivos plantilla (.dwg, .skp, .rvt) en el siguiente paso para asegurar la integridad del expediente. Si no se proporcionan, el sistema generará archivos marcadores de posición.
-              </p>
+            {/* Right: Init Chatbot */}
+            <div className="w-full md:w-2/3 flex flex-col bg-slate-900 border border-slate-700 rounded-lg overflow-hidden">
+                <div className="bg-slate-800 p-3 border-b border-slate-700 flex items-center gap-2">
+                    <Bot size={16} className="text-emerald-400"/>
+                    <span className="text-sm font-bold text-white">Asistente de Configuración</span>
+                </div>
+                <div className="flex-grow p-4 overflow-y-auto space-y-4 bg-black/20">
+                    {initChatHistory.map((msg, i) => (
+                        <div key={i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                            <div className={`max-w-[85%] p-3 rounded-lg text-sm ${msg.role === 'user' ? 'bg-emerald-600 text-white rounded-br-none' : 'bg-slate-700 text-slate-200 rounded-bl-none'}`}>
+                                {msg.text}
+                            </div>
+                        </div>
+                    ))}
+                    <div ref={initChatEndRef} />
+                </div>
+                <div className="p-3 bg-slate-800 border-t border-slate-700 flex gap-2">
+                    <input 
+                        type="text" 
+                        value={initChatInput}
+                        onChange={(e) => setInitChatInput(e.target.value)}
+                        onKeyDown={(e) => e.key === 'Enter' && handleSendInitMessage()}
+                        placeholder="Ej. Es una remodelación de oficinas de gobierno..." 
+                        className="flex-grow bg-slate-900 border border-slate-600 rounded px-3 py-2 text-sm text-white focus:border-emerald-500 outline-none"
+                    />
+                    <button onClick={handleSendInitMessage} className="bg-emerald-600 hover:bg-emerald-500 text-white p-2 rounded">
+                        <Send size={16} />
+                    </button>
+                </div>
             </div>
-
-            <h2 className="text-xl font-semibold text-white">Configuración del Proyecto</h2>
-            <div className="grid gap-4 max-w-md">
-              <input 
-                type="text" 
-                placeholder="Nombre del Proyecto (ej. LEON_TORRE-NUBES)"
-                className="bg-slate-900 border border-slate-600 rounded p-3 text-white focus:border-emerald-500 outline-none"
-                value={projectData.name}
-                onChange={e => setProjectData({...projectData, name: e.target.value})}
-              />
-              <input 
-                type="text" 
-                placeholder="Ciudad"
-                className="bg-slate-900 border border-slate-600 rounded p-3 text-white focus:border-emerald-500 outline-none"
-                value={projectData.city}
-                onChange={e => setProjectData({...projectData, city: e.target.value})}
-              />
-              <input 
-                type="text" 
-                placeholder="Tipología (ej. Residencial, Comercial)"
-                className="bg-slate-900 border border-slate-600 rounded p-3 text-white focus:border-emerald-500 outline-none"
-                value={projectData.type}
-                onChange={e => setProjectData({...projectData, type: e.target.value})}
-              />
-            </div>
-            
-            <button 
-              onClick={() => {
-                if(!projectData.name) {
-                    addLog("Error: Se requiere el nombre del proyecto.");
-                    return;
-                }
-                addLog(`Proyecto ${projectData.name} configurado.`);
-                setPhase('STRUCTURE');
-              }}
-              className="mt-6 bg-emerald-600 hover:bg-emerald-500 text-white px-6 py-3 rounded font-bold transition-all flex items-center gap-2"
-            >
-              Inicializar Sistema <Terminal size={18} />
-            </button>
           </div>
         )}
 
+        {/* PHASE 2: STRUCTURE PREVIEW */}
         {phase === 'STRUCTURE' && (
           <div className="animate-in fade-in slide-in-from-bottom-4 duration-500 h-full flex flex-col">
             <h2 className="text-xl font-semibold text-white mb-4 flex items-center gap-2">
-              <FolderTree /> Arquitectura de Directorios
+              <FolderTree /> Estructura Generada: <span className="text-emerald-400">{projectData.type}</span>
             </h2>
-            <p className="text-slate-400 mb-6 text-sm">
-              El sistema ha preconfigurado la siguiente estructura basada en los protocolos SIENNA.
-              Sube tus plantillas base para mapearlas automáticamente a estas ubicaciones.
-            </p>
-
-            <div className="flex-grow grid grid-cols-1 md:grid-cols-2 gap-6 min-h-0">
-              {/* Upload Zone */}
-              <div className="border-2 border-dashed border-slate-600 rounded-lg p-8 flex flex-col items-center justify-center text-center hover:border-emerald-500 transition-colors bg-slate-900/50">
-                <Upload size={48} className="text-slate-500 mb-4" />
-                <p className="text-slate-300 font-bold mb-2">Arrastra y Suelta Plantillas</p>
-                <p className="text-xs text-slate-500 mb-4">Soportado: .dwg, .rvt, .skp, .xlsx</p>
-                <input 
-                  type="file" 
-                  multiple 
-                  onChange={handleFileUpload} 
-                  className="file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-emerald-600 file:text-white hover:file:bg-emerald-500 text-sm text-slate-400"
-                />
-                <div className="mt-4 w-full text-left max-h-32 overflow-y-auto">
-                  {Object.keys(uploadedFiles).map(name => (
-                    <div key={name} className="flex items-center gap-2 text-xs text-emerald-400">
-                      <CheckCircle size={10} /> {name}
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              {/* Structure Preview */}
-              <div className="bg-slate-900 rounded p-4 overflow-y-auto max-h-[400px] font-mono text-xs border border-slate-700">
-                <StructurePreview data={SIENNA_STRUCTURE} />
-              </div>
-            </div>
-
-            <div className="mt-6 flex justify-end">
-              <button 
-                onClick={() => setPhase('COST')}
-                className="bg-blue-600 hover:bg-blue-500 text-white px-6 py-3 rounded font-bold transition-all flex items-center gap-2"
-              >
-                Siguiente: Costo Paramétrico <Calculator size={18} />
-              </button>
-            </div>
-          </div>
-        )}
-
-        {phase === 'COST' && (
-          <div className="animate-in fade-in slide-in-from-bottom-4 duration-500">
-            <h2 className="text-xl font-semibold text-white mb-6 flex items-center gap-2">
-              <Calculator /> Estimación de Costo Paramétrico
-            </h2>
-            
-            <div className="grid md:grid-cols-2 gap-8">
-              <div className="space-y-6">
-                <div>
-                  <label className="block text-sm text-slate-400 mb-2">Área de Construcción (m²)</label>
-                  <input 
-                    type="number" 
-                    value={costParams.area}
-                    onChange={(e) => setCostParams({...costParams, area: Number(e.target.value)})}
-                    className="w-full bg-slate-900 border border-slate-600 rounded p-3 text-white focus:border-emerald-500 text-lg"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm text-slate-400 mb-2">Nivel de Acabados</label>
-                  <div className="grid grid-cols-3 gap-2">
-                    {(['Básico', 'Medio', 'Lujo'] as FinishLevel[]).map(level => (
-                      <button
-                        key={level}
-                        onClick={() => setCostParams({...costParams, finishes: level})}
-                        className={`p-3 rounded border text-sm font-bold transition-all ${
-                          costParams.finishes === level 
-                          ? 'bg-emerald-600 border-emerald-500 text-white' 
-                          : 'bg-slate-900 border-slate-600 text-slate-400 hover:bg-slate-800'
-                        }`}
-                      >
-                        {level}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-                <button 
-                  onClick={executeCostCalculation}
-                  className="w-full bg-emerald-600 hover:bg-emerald-500 text-white px-6 py-3 rounded font-bold transition-all"
-                >
-                  Calcular Estimación
-                </button>
-              </div>
-
-              {costResult && (
-                <div className="bg-slate-900 p-6 rounded-lg border border-slate-700">
-                  <h3 className="text-lg font-bold text-white mb-4 border-b border-slate-700 pb-2">Presupuesto Estimado</h3>
-                  <div className="space-y-3 font-mono text-sm">
-                    <CostRow label="Preliminares" value={costResult.preliminares} />
-                    <CostRow label="Cimentación" value={costResult.cimentacion} />
-                    <CostRow label="Estructura" value={costResult.estructura} />
-                    <CostRow label="Acabados" value={costResult.acabados} />
-                    <CostRow label="Instalaciones" value={costResult.instalaciones} />
-                    <div className="border-t border-slate-700 pt-3 mt-4">
-                      <CostRow label="TOTAL ESTIMADO" value={costResult.total} isTotal />
-                      <div className="text-right text-xs text-slate-500 mt-1">
-                        Unitario: ${costResult.unitario.toLocaleString('es-MX', {maximumFractionDigits: 2})} / m²
-                      </div>
-                    </div>
-                  </div>
-                </div>
+            <div className="flex-grow bg-slate-900 rounded p-6 overflow-y-auto max-h-[500px] font-mono text-sm border border-slate-700 shadow-inner mb-6">
+              {generatedStructure ? (
+                  <StructurePreview data={generatedStructure} />
+              ) : (
+                  <div className="text-slate-500">Debes inicializar el proyecto primero.</div>
               )}
             </div>
-
-            <div className="mt-8 flex justify-between items-center border-t border-slate-700 pt-6">
-              <button 
-                onClick={() => setPhase('EXECUTION')} 
-                className="text-slate-400 hover:text-white transition-colors"
-              >
-                Omitir Estimación
-              </button>
-              <button 
-                onClick={() => setPhase('EXECUTION')}
-                className="bg-blue-600 hover:bg-blue-500 text-white px-8 py-3 rounded font-bold transition-all flex items-center gap-2"
-              >
-                Proceder a Ejecución <FileText size={18} />
+            <div className="flex justify-end">
+              <button onClick={() => setPhase('COST')} className="bg-blue-600 hover:bg-blue-500 text-white px-6 py-3 rounded font-bold transition-all flex items-center gap-2">
+                Siguiente: Costos <Calculator size={18} />
               </button>
             </div>
           </div>
         )}
 
+        {/* PHASE 3: COST WITH CHAT */}
+        {phase === 'COST' && (
+          <div className="animate-in fade-in slide-in-from-bottom-4 duration-500 h-full flex flex-col md:flex-row gap-6">
+            {/* Left Controls */}
+            <div className="w-full md:w-1/2 flex flex-col gap-4">
+               <h2 className="text-xl font-semibold text-white flex items-center gap-2"><Calculator /> Presupuesto</h2>
+               <div className="bg-slate-700/30 p-4 rounded-lg border border-slate-600 space-y-4">
+                  <div>
+                    <label className="text-xs text-slate-400 uppercase">Superficie (m²)</label>
+                    <input type="number" value={costParams.area} onChange={(e) => setCostParams({...costParams, area: Number(e.target.value)})} className="w-full bg-slate-900 border border-slate-600 rounded p-2 text-white focus:border-emerald-500" />
+                  </div>
+                  <div>
+                    <label className="text-xs text-slate-400 uppercase">Nivel Acabados</label>
+                    <div className="grid grid-cols-3 gap-1 mt-1">
+                      {(['Básico', 'Medio', 'Lujo'] as FinishLevel[]).map(level => (
+                        <button key={level} onClick={() => setCostParams({...costParams, finishes: level})} className={`p-2 rounded text-xs font-bold border ${costParams.finishes === level ? 'bg-emerald-600 border-emerald-500 text-white' : 'bg-slate-800 border-slate-600 text-slate-400'}`}>{level}</button>
+                      ))}
+                    </div>
+                  </div>
+                  <button onClick={executeCostCalculation} className="w-full bg-emerald-600 hover:bg-emerald-500 text-white py-2 rounded font-bold transition-all">
+                    Calcular
+                  </button>
+               </div>
+               {costResult && (
+                 <div className="flex-grow bg-slate-900 p-4 rounded-lg border border-slate-700 overflow-y-auto max-h-[300px]">
+                    <div className="flex justify-between items-end border-b border-slate-700 pb-2 mb-2">
+                      <span className="text-sm font-bold text-white">Total</span>
+                      <span className="text-xl font-bold text-emerald-400">${costResult.total.toLocaleString('es-MX',{maximumFractionDigits:0})}</span>
+                    </div>
+                    <div className="space-y-2">
+                       {Array.from(new Set(costResult.breakdown.map(i => i.partida))).map(partida => {
+                          const subTotal = costResult.breakdown.filter(i => i.partida === partida).reduce((acc, curr) => acc + curr.importe, 0);
+                          return (
+                            <div key={partida} className="text-sm">
+                               <div className="flex justify-between text-slate-300 font-semibold bg-slate-800/50 px-2 py-1 rounded"><span>{partida}</span><span>${subTotal.toLocaleString('es-MX', {maximumFractionDigits:0})}</span></div>
+                               <div className="pl-4 mt-1 space-y-1">
+                                  {Array.from(new Set(costResult.breakdown.filter(i => i.partida === partida).map(i => i.subpartida))).map(sub => (
+                                     <div key={sub} className="text-xs text-slate-500 flex items-center gap-1"><div className="w-1 h-1 bg-slate-600 rounded-full"></div> {sub}</div>
+                                  ))}
+                               </div>
+                            </div>
+                          )
+                       })}
+                    </div>
+                 </div>
+               )}
+            </div>
+            {/* Right Cost Chat */}
+            <div className="w-full md:w-1/2 flex flex-col bg-slate-900 border border-slate-700 rounded-lg overflow-hidden">
+                <div className="bg-slate-800 p-3 border-b border-slate-700 flex items-center gap-2">
+                    <Bot size={16} className="text-blue-400"/>
+                    <span className="text-sm font-bold text-white">Asistente de Materiales</span>
+                </div>
+                <div className="flex-grow p-4 overflow-y-auto space-y-4 bg-black/20">
+                    {costChatHistory.map((msg, i) => (
+                        <div key={i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                            <div className={`max-w-[85%] p-3 rounded-lg text-sm ${msg.role === 'user' ? 'bg-blue-600 text-white rounded-br-none' : 'bg-slate-700 text-slate-200 rounded-bl-none'}`}>{msg.text}</div>
+                        </div>
+                    ))}
+                    <div ref={costChatEndRef} />
+                </div>
+                <div className="p-3 bg-slate-800 border-t border-slate-700 flex gap-2">
+                    <input type="text" value={costChatInput} onChange={(e) => setCostChatInput(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleSendCostMessage()} placeholder="Ej. Quiero piso de mármol..." className="flex-grow bg-slate-900 border border-slate-600 rounded px-3 py-2 text-sm text-white focus:border-blue-500 outline-none" />
+                    <button onClick={handleSendCostMessage} className="bg-blue-600 hover:bg-blue-500 text-white p-2 rounded"><Send size={16} /></button>
+                </div>
+                {costResult && (
+                    <div className="p-3 border-t border-slate-700 bg-emerald-900/10">
+                        <button onClick={() => setPhase('EXECUTION')} className="w-full bg-white text-emerald-900 font-bold py-2 rounded text-sm hover:bg-emerald-50 transition-colors flex items-center justify-center gap-2">Aprobar <CheckCircle size={14}/></button>
+                    </div>
+                )}
+            </div>
+          </div>
+        )}
+
+        {/* PHASE 4: EXECUTION */}
         {phase === 'EXECUTION' && (
           <div className="animate-in fade-in slide-in-from-bottom-4 duration-500 flex flex-col items-center justify-center h-full text-center">
             <FileText size={64} className="text-emerald-500 mb-6" />
-            <h2 className="text-3xl font-bold text-white mb-2">Listo para Ejecutar</h2>
-            <p className="text-slate-400 max-w-md mb-8">
-              SIENNA OS generará ahora la estructura completa de archivos, integrará tus plantillas
-              y compilará el análisis de costos en un archivo ZIP completo.
-            </p>
-            
-            <button 
-              onClick={executeZipGeneration}
-              className="bg-emerald-600 hover:bg-emerald-500 text-white px-8 py-4 rounded-lg font-bold text-lg transition-all flex items-center gap-3 shadow-lg hover:shadow-emerald-500/20"
-            >
-              <Download /> Generar y Descargar Expediente
-            </button>
+            <h2 className="text-3xl font-bold text-white mb-2">Expediente Listo</h2>
+            <p className="text-slate-400 max-w-md mb-8">El sistema ha compilado la estructura de carpetas personalizada para <strong>{projectData.type}</strong> y el presupuesto estimado.</p>
+            <button onClick={executeZipGeneration} className="bg-emerald-600 hover:bg-emerald-500 text-white px-8 py-4 rounded-lg font-bold text-lg transition-all flex items-center gap-3 shadow-lg hover:shadow-emerald-500/20"><Download /> Descargar Expediente</button>
           </div>
         )}
 
@@ -292,19 +340,10 @@ const App = () => {
   );
 };
 
-// Sub-components
-
 const PhaseIndicator = ({ active, label }: { active: boolean, label: string }) => (
   <div className={`flex items-center gap-3 transition-colors ${active ? 'text-emerald-400' : 'text-slate-600'}`}>
     <div className={`w-2 h-2 rounded-full ${active ? 'bg-emerald-400 shadow-[0_0_10px_rgba(52,211,153,0.5)]' : 'bg-slate-600'}`} />
-    <span className="font-mono text-sm font-bold">{label}</span>
-  </div>
-);
-
-const CostRow = ({ label, value, isTotal = false }: { label: string, value: number, isTotal?: boolean }) => (
-  <div className={`flex justify-between items-center ${isTotal ? 'text-emerald-400 font-bold text-base' : 'text-slate-300'}`}>
-    <span>{label}</span>
-    <span>${value.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+    <span className="font-mono text-xs font-bold">{label}</span>
   </div>
 );
 
@@ -312,23 +351,20 @@ const StructurePreview = ({ data, level = 0 }: { data: any, level?: number }) =>
   return (
     <div style={{ marginLeft: level * 12 }}>
       {Object.keys(data).map(key => {
-        if (Array.isArray(data[key])) {
-          return (
-            <div key={key}>
-              <div className="text-blue-400 font-bold flex items-center gap-1">
-                <FolderTree size={10} /> {key}
-              </div>
-              <div className="ml-3 border-l border-slate-700 pl-2">
-                {data[key].map((item: string, idx: number) => (
-                  <div key={idx} className="text-slate-500 py-0.5 hover:text-slate-300">
-                    {item.endsWith('/') ? `📂 ${item}` : `📄 ${item}`}
-                  </div>
+        const content = data[key];
+        const isArray = Array.isArray(content);
+        return (
+          <div key={key} className="mb-2">
+            <div className="text-blue-400 font-bold flex items-center gap-2 text-xs"><FolderTree size={14} /> {key}</div>
+            {isArray ? (
+              <div className="ml-4 border-l border-slate-700 pl-3 mt-1 space-y-1">
+                {content.map((subItem: string, idx: number) => (
+                  <div key={idx} className="text-slate-500 text-xs flex items-center gap-2"><div className="w-1 h-1 bg-slate-600 rounded-full"></div>{subItem}</div>
                 ))}
               </div>
-            </div>
-          );
-        }
-        return null;
+            ) : (<div className="mt-1"><StructurePreview data={content} level={level + 1} /></div>)}
+          </div>
+        );
       })}
     </div>
   );

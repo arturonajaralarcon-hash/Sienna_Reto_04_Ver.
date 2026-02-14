@@ -1,5 +1,5 @@
 import JSZip from 'jszip';
-import { SIENNA_STRUCTURE } from '../data/structure';
+import { BudgetResult } from './costService';
 
 declare global {
   interface Window {
@@ -10,90 +10,75 @@ declare global {
 
 export const generateProjectZip = async (
   projectName: string, 
-  costData: any, 
+  structure: any, // Accepts dynamic structure
+  costData: BudgetResult, 
   uploadedFiles: Record<string, File>
 ) => {
   const zip = new window.JSZip();
   const rootFolder = zip.folder(projectName.replace(/\s+/g, '_'));
 
   // Recursive function to build tree
-  const buildTree = (folder: any, structure: any, currentPath: string) => {
-    if (Array.isArray(structure)) {
-      structure.forEach(item => {
+  const buildTree = (folder: any, currentStructure: any) => {
+    if (Array.isArray(currentStructure)) {
+      currentStructure.forEach(item => {
         if (typeof item === 'string') {
-          // Check if user uploaded a file for this path
-          // We simplify matching: if uploaded file name matches item name
-          // In a real app, we'd map specific upload slots to specific paths.
-          // Here, if the user uploaded "ARQ-01_Plantas.dwg", we place it.
-          const fileName = item.split('/').pop() || item;
-          const userFile = Object.values(uploadedFiles).find(f => f.name === fileName);
-          
-          if (userFile) {
-            folder.file(fileName, userFile);
-          } else {
-            // Create placeholder
-            folder.file(fileName, ""); 
-          }
-        } else {
-          // It's a folder defined as object key? 
-          // The structure provided is Object with Arrays. 
-          // Subfolders inside arrays are just strings ending with / or needing inference?
-          // The provided structure is flat arrays per category.
-          // However, strings like "00_Bocetos/Sketchup/Modelo.skp" imply paths.
-          // We need to parse paths.
+          const parts = item.split('/');
+          let current = folder;
+          parts.forEach((part: string) => {
+             current = current.folder(part);
+          });
         }
       });
     } else {
-      Object.keys(structure).forEach(key => {
+      Object.keys(currentStructure).forEach(key => {
         const subFolder = folder.folder(key);
-        // Handle the array of strings which might contain paths
-        structure[key].forEach((filePath: string) => {
-            const parts = filePath.split('/');
-            let current = subFolder;
-            
-            // Iterate parts to create subfolders if needed
-            for(let i=0; i<parts.length -1; i++) {
-                current = current.folder(parts[i]);
-            }
-            
-            const fileName = parts[parts.length-1];
-            // Check for upload
-            const userFile = Object.values(uploadedFiles).find(f => f.name === fileName);
-            if (userFile) {
-                current.file(fileName, userFile);
-            } else {
-                // If it ends with / it's a folder
-                if (fileName !== "") {
-                    current.file(fileName, ""); 
-                }
-            }
-        });
+        buildTree(subFolder, currentStructure[key]);
       });
     }
   };
 
-  buildTree(rootFolder, SIENNA_STRUCTURE, "");
+  buildTree(rootFolder, structure);
 
-  // Generate Budget CSV
-  if (costData) {
-    const csvContent = `PARTIDA,COSTO ESTIMADO
-PRELIMINARES,${costData.preliminares.toFixed(2)}
-CIMENTACION,${costData.cimentacion.toFixed(2)}
-ESTRUCTURA,${costData.estructura.toFixed(2)}
-ACABADOS,${costData.acabados.toFixed(2)}
-INSTALACIONES,${costData.instalaciones.toFixed(2)}
-TOTAL,${costData.total.toFixed(2)}`;
+  // Generate Summarized Budget CSV (Partidas and Subpartidas only)
+  if (costData && costData.breakdown) {
+    let csvContent = "PARTIDA,SUBPARTIDA,IMPORTE_ESTIMADO\n";
     
-    // Look for 05_Costos folder to place it
-    const costsFolder = rootFolder.folder("05_Costos");
+    // Aggregate data by Partida -> Subpartida
+    const aggregation: Record<string, Record<string, number>> = {};
+
+    costData.breakdown.forEach(item => {
+        if (!aggregation[item.partida]) {
+            aggregation[item.partida] = {};
+        }
+        if (!aggregation[item.partida][item.subpartida]) {
+            aggregation[item.partida][item.subpartida] = 0;
+        }
+        aggregation[item.partida][item.subpartida] += item.importe;
+    });
+
+    // Write sorted rows
+    const partidas = Object.keys(aggregation).sort();
+    partidas.forEach(partida => {
+        const subpartidas = Object.keys(aggregation[partida]).sort();
+        subpartidas.forEach(sub => {
+            const amount = aggregation[partida][sub];
+            csvContent += `${partida},${sub},${amount.toFixed(2)}\n`;
+        });
+    });
+
+    csvContent += `\nRESUMEN GENERAL,,\n`;
+    csvContent += `COSTO DIRECTO,,"$${(costData.total / 1.25).toFixed(2)}"\n`;
+    csvContent += `INDIRECTOS Y UTILIDAD (25%),,"$${(costData.total - (costData.total / 1.25)).toFixed(2)}"\n`;
+    csvContent += `TOTAL PRESUPUESTO,,"$${costData.total.toFixed(2)}"\n`;
+    
+    const costsFolder = rootFolder.folder("05_Costos_y_Presupuestos");
     if (costsFolder) {
-        costsFolder.file("PRESUPUESTO_SIENNA.csv", csvContent);
+        costsFolder.file("PRESUPUESTO_SIENNA_PARTIDAS.csv", csvContent);
     }
   }
 
-  // Generate readme
-  rootFolder.file("README_SIENNA.txt", `Expediente generado por SIENNA OS v3.0\nProyecto: ${projectName}\nFecha: ${new Date().toLocaleDateString()}`);
+  rootFolder.file("LEAME_SIENNA.txt", `Expediente generado por SIENNA OS v3.0\nProyecto: ${projectName}\nFecha: ${new Date().toLocaleDateString()}\n\nEl archivo CSV en la carpeta 05 contiene el resumen de costos agrupado por partidas y subpartidas.`);
 
   const content = await zip.generateAsync({ type: "blob" });
-  window.saveAs(content, `${projectName}_Expediente_SIENNA.zip`);
+  window.saveAs(content, `${projectName}_Estructura_SIENNA.zip`);
 };

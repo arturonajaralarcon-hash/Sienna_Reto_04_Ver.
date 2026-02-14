@@ -9,115 +9,169 @@ interface CostItem {
   precio: number;
 }
 
-// Simple CSV parser
+export interface BudgetLineItem {
+  partida: string;
+  subpartida: string; // New field
+  clave: string;
+  concepto: string;
+  unidad: string;
+  cantidad: number;
+  precioUnitario: number;
+  importe: number;
+}
+
+export interface BudgetResult {
+  breakdown: BudgetLineItem[];
+  preliminares: number;
+  cimentacion: number;
+  estructura: number;
+  acabados: number;
+  instalaciones: number;
+  total: number;
+  unitario: number;
+}
+
 const parseCSV = (csvText: string): CostItem[] => {
   const lines = csvText.split('\n');
   const items: CostItem[] = [];
-  
-  // Skip header
   for (let i = 1; i < lines.length; i++) {
     const line = lines[i];
     if (!line || line.trim() === '') continue;
-    
-    // Parse line respecting quotes
     const cols: string[] = [];
     let current = '';
     let inQuotes = false;
-
     for (let j = 0; j < line.length; j++) {
         const char = line[j];
-        if (char === '"') {
-            inQuotes = !inQuotes;
-        } else if (char === ',' && !inQuotes) {
-            cols.push(current);
-            current = '';
-        } else {
-            current += char;
-        }
+        if (char === '"') inQuotes = !inQuotes;
+        else if (char === ',' && !inQuotes) { cols.push(current); current = ''; }
+        else current += char;
     }
     cols.push(current);
-
-    // Clean up quotes from columns
     const cleanedCols = cols.map(col => {
         const trimmed = col.trim();
-        if (trimmed.startsWith('"') && trimmed.endsWith('"')) {
-            return trimmed.slice(1, -1).replace(/""/g, '"');
-        }
-        return trimmed;
+        return (trimmed.startsWith('"') && trimmed.endsWith('"')) ? trimmed.slice(1, -1).replace(/""/g, '"') : trimmed;
     });
-
     if (cleanedCols.length >= 4) {
-      items.push({
-        clave: cleanedCols[0],
-        concepto: cleanedCols[1],
-        unidad: cleanedCols[2],
-        precio: parseFloat(cleanedCols[3])
-      });
+      items.push({ clave: cleanedCols[0], concepto: cleanedCols[1], unidad: cleanedCols[2], precio: parseFloat(cleanedCols[3]) });
     }
   }
   return items;
 };
 
 const items = parseCSV(SIENNA_PRICES_CSV);
+const findItem = (clave: string) => items.find(i => i.clave === clave) || { clave, concepto: 'ITEM NO ENCONTRADO', unidad: 'pza', precio: 0 };
 
-export const calculate = (area: number, level: FinishLevel) => {
-  // Define assembly costs based on extracted keys from the CSV
-  // These are derived from unit prices * inferred quantities per m2 of construction
+export const calculate = (area: number, level: FinishLevel, preferences: string = ""): BudgetResult => {
+  const breakdown: BudgetLineItem[] = [];
+  const prefs = preferences.toLowerCase();
+
+  const addItem = (partida: string, subpartida: string, clave: string, quantityCalc: number, conceptOverride?: string) => {
+    const dbItem = findItem(clave);
+    const qty = quantityCalc;
+    const total = qty * dbItem.precio;
+    
+    breakdown.push({
+      partida,
+      subpartida,
+      clave: dbItem.clave,
+      concepto: conceptOverride || dbItem.concepto,
+      unidad: dbItem.unidad,
+      cantidad: qty,
+      precioUnitario: dbItem.precio,
+      importe: total
+    });
+    return total;
+  };
+
+  // --- 1. PRELIMINARES ---
+  let sum_preliminares = 0;
+  sum_preliminares += addItem("1. PRELIMINARES", "TERRACERÍAS", "UEC.ED.10.100.1010", area * 0.6);
+  sum_preliminares += addItem("1. PRELIMINARES", "TOPOGRAFÍA", "UEC.ED.12.100.1010", area * 0.6);
+
+  // --- 2. CIMENTACION ---
+  let sum_cimentacion = 0;
+  sum_cimentacion += addItem("2. CIMENTACIÓN", "EXCAVACIONES", "UEC.ED.12.105.1010", area * 0.4);
+  sum_cimentacion += addItem("2. CIMENTACIÓN", "PLANTILLAS", "UEC.ED.16.100.1010.1", area * 0.3);
+  sum_cimentacion += addItem("2. CIMENTACIÓN", "CONCRETOS", "UEC.ED.16.115.1005.1", area * 0.15);
+
+  // --- 3. ESTRUCTURA ---
+  let sum_estructura = 0;
   
-  // 1. Preliminares (Despalme, Trazo)
-  const p_despalme = items.find(i => i.clave === "UEC.ED.10.100.1010")?.precio || 66.69;
-  const p_trazo = items.find(i => i.clave === "UEC.ED.12.100.1010")?.precio || 10.28;
-  const cost_preliminares = (p_despalme + p_trazo) * 1.1; // +10% overhead
-
-  // 2. Cimentación (Excavación, Plantilla, Concreto)
-  const p_excavacion = items.find(i => i.clave === "UEC.ED.12.105.1010")?.precio || 148.20;
-  const p_concreto_cim = items.find(i => i.clave === "UEC.ED.16.115.1005.1")?.precio || 2936.10;
-  // Assume 0.4 m3 exc/m2 and 0.1 m3 conc/m2
-  const cost_cimentacion = (p_excavacion * 0.4) + (p_concreto_cim * 0.1);
-
-  // 3. Estructura (Muros, Losas)
-  // Muro Tabique (Medio/Lujo) vs Block (Basico)
-  const p_muro_tabique = items.find(i => i.clave === "UEC.ED.30.135.1050")?.precio || 464.23;
-  const p_muro_block = items.find(i => i.clave === "UEC.ED.30.150.1010.1")?.precio || 384.03;
+  // Logic for Walls based on Chat/Level
+  let muroClave = "UEC.ED.30.135.1050"; // Default Tabique
+  let muroDesc = "Muro de Tabique Rojo";
   
-  const p_losa = items.find(i => i.clave === "UEC.ED.20.135.1010.1")?.precio || 928.25;
+  if (prefs.includes("block") || prefs.includes("bloque")) {
+      muroClave = "UEC.ED.30.150.1010.1";
+      muroDesc = "Muro de Block (Solicitud Cliente)";
+  } else if (prefs.includes("termico") || prefs.includes("térmico") || prefs.includes("hebel")) {
+      muroClave = "UEC.ED.30.150.1010.2";
+      muroDesc = "Muro Térmico Ligero (Solicitud Cliente)";
+  } else if (level === 'Básico') {
+      muroClave = "UEC.ED.30.150.1010.1";
+      muroDesc = "Muro de Block (Estándar Básico)";
+  }
 
-  let unit_muro = level === 'Básico' ? p_muro_block : p_muro_tabique;
-  // Factor: 2.5 m2 wall per 1 m2 floor
-  const cost_estructura = (unit_muro * 2.5) + (p_losa * 1.0);
+  sum_estructura += addItem("3. ESTRUCTURA", "ALBAÑILERÍA MUROS", muroClave, area * 2.2, muroDesc);
+  
+  // Logic for Slabs
+  let losaClave = "UEC.ED.20.135.1010.1"; // Vigueta
+  if (prefs.includes("losa maciza") || prefs.includes("concreto solido")) {
+      losaClave = "UEC.ED.20.135.1010.2";
+  }
+  sum_estructura += addItem("3. ESTRUCTURA", "LOSAS Y ENTREPISOS", losaClave, area);
+  
+  // Castillos
+  sum_estructura += addItem("3. ESTRUCTURA", "ELEMENTOS VERTICALES", "UEC.ED.18.145.1010.1", area * 0.4);
 
-  // 4. Acabados (Pisos, Yeso, Pintura)
-  const p_aplanado = items.find(i => i.clave === "UEC.ED.30.205.1110")?.precio || 153.10;
-  const p_piso = items.find(i => i.clave === "UEC.ED.78.110.1010")?.precio || 455.51;
-  const p_pintura = items.find(i => i.clave === "UEC.ED.78.145.1010")?.precio || 105.57;
+  // --- 4. ACABADOS ---
+  let sum_acabados = 0;
+  
+  // Pisos
+  let pisoClave = "UEC.ED.78.110.1010"; // Ceramic
+  let pisoDesc = "Piso Cerámico";
+  
+  if (prefs.includes("marmol") || prefs.includes("mármol") || prefs.includes("piedra")) {
+      pisoClave = "UEC.ED.78.110.1020";
+      pisoDesc = "Piso de Mármol Travertino (Solicitud Cliente)";
+  } else if (prefs.includes("laminado") || prefs.includes("madera") || prefs.includes("duela")) {
+      pisoClave = "UEC.ED.78.110.1030";
+      pisoDesc = "Piso Laminado (Solicitud Cliente)";
+  } else if (level === 'Lujo') {
+      pisoClave = "UEC.ED.78.110.1020"; // Auto upgrade for Luxury
+      pisoDesc = "Piso de Mármol (Estándar Lujo)";
+  }
 
-  let multiplier = level === 'Básico' ? 1 : level === 'Medio' ? 1.3 : 1.8;
+  sum_acabados += addItem("4. ACABADOS", "PISOS Y FIRMES", pisoClave, area * 1.05, pisoDesc);
   
-  // 2.5m2 walls + 1m2 ceiling for aplanado/pintura
-  const cost_acabados = ((p_aplanado + p_pintura) * 3.5) + (p_piso * 1.0);
+  // Aplanados
+  let aplanadoClave = "UEC.ED.30.205.1110"; // Cemento arena
+  if (prefs.includes("yeso") || level === 'Lujo') {
+      aplanadoClave = "UEC.ED.30.205.1120";
+  }
+  sum_acabados += addItem("4. ACABADOS", "RECUBRIMIENTOS MUROS", aplanadoClave, (area * 2.2 * 2));
   
-  // 5. Instalaciones (Estimated as % of total)
-  // Usually 15-20%
-  
-  let subtotal = (cost_preliminares + cost_cimentacion + cost_estructura + cost_acabados);
-  
-  // Apply level multiplier to finishes and structure slightly
-  subtotal = subtotal * multiplier;
+  sum_acabados += addItem("4. ACABADOS", "PINTURA", "UEC.ED.78.145.1010", (area * 2.2 * 2) + area);
+  sum_acabados += addItem("4. ACABADOS", "OBRA EXTERIOR", "UEC.UB.10.105.1005.1", area * 0.1);
 
-  const cost_instalaciones = subtotal * 0.20;
-  
-  const total_directo = subtotal + cost_instalaciones;
-  const indirectos = total_directo * 0.25; // 25% indirects + profit
+  // --- 5. INSTALACIONES ---
+  let sum_instalaciones = 0;
+  // Estimate exits based on area. Approx 1 exit per 3 m2 for electric, 1 per 10m2 for hydro
+  sum_instalaciones += addItem("5. INSTALACIONES", "HIDROSANITARIA", "UEC.ED.38.100.1010", Math.ceil(area / 10));
+  sum_instalaciones += addItem("5. INSTALACIONES", "ELÉCTRICA", "UEC.ED.46.102.1010", Math.ceil(area / 3));
 
-  const total_unit = total_directo + indirectos;
+  const costoDirecto = sum_preliminares + sum_cimentacion + sum_estructura + sum_acabados + sum_instalaciones;
+  const porcentajeIndirectos = 0.25;
+  const total = costoDirecto * (1 + porcentajeIndirectos);
 
   return {
-    preliminares: cost_preliminares * area,
-    cimentacion: cost_cimentacion * area * multiplier,
-    estructura: cost_estructura * area,
-    acabados: cost_acabados * area * multiplier,
-    instalaciones: cost_instalaciones * area,
-    total: total_unit * area,
-    unitario: total_unit
+    breakdown,
+    preliminares: sum_preliminares,
+    cimentacion: sum_cimentacion,
+    estructura: sum_estructura,
+    acabados: sum_acabados,
+    instalaciones: sum_instalaciones,
+    total: total,
+    unitario: total / (area || 1)
   };
 };

@@ -1,57 +1,91 @@
-export const SIENNA_STRUCTURE = {
+const MASTER_STRUCTURE = {
     "00_Insumos": [
         "00_Cotizacion",
         "01_Referencias",
         "02_Normativa"
     ],
     "01_Anteproyecto": [
-        "AP-00_Memoria_Descriptiva.docx",
-        "AP-01_Planta_Baja_Estado_Actual.dwg",
-        "AP-02_Planta_Alta_Estado_Actual.dwg",
-        "AP-03_Levantamiento_Fotografico.dwg",
-        "AP-08_Plantas_de_Intervencion.dwg",
-        "00_Bocetos/Sketchup/Modelo_3D_ARQ.skp",
-        "00_Bocetos/Sketchup/Proceso.skp",
-        "00_Bocetos/Diagramas_de_proceso/",
-        "01_Maquetas/Maqueta_de_Estudio_Fotos",
-        "01_Maquetas/Maqueta_de_Estudio_Editables",
-        "01_Maquetas/Maqueta_Final",
-        "02_Presentacion"
+        "00_Memoria_Descriptiva",
+        "01_Levantamiento",
+        "02_Bocetos/Sketchup",
+        "02_Bocetos/Diagramas",
+        "03_Maquetas/Fotos",
+        "03_Maquetas/Editables",
+        "04_Presentacion_Cliente"
     ],
     "02_Ejecutivo_Arquitectonico": [
-        "01_Proyecto_OBRA_NUEVA/01_Arquitectonico/ARQ-01_Plantas.dwg",
-        "01_Proyecto_OBRA_NUEVA/01_Arquitectonico/ARQ-02_Cortes.dwg",
-        "01_Proyecto_OBRA_NUEVA/01_Arquitectonico/ARQ-03_Fachadas.dwg",
-        "01_Proyecto_OBRA_NUEVA/02_Ejes_y_Trazo/TRA-01_Trazo.dwg",
-        "01_Proyecto_OBRA_NUEVA/03_Albañilerias/ALB-01_Albañileria.dwg",
-        "01_Proyecto_OBRA_NUEVA/04_Carpinterias/CAR-01_Carpinteria.dwg",
-        "01_Proyecto_OBRA_NUEVA/05_Herrerias/HER-01_Herreria.dwg",
-        "01_Proyecto_OBRA_NUEVA/06_Cancelerias/CAR-01_Canceleria.dwg",
-        "02_Proyecto_REHABILITACION",
-        "03_Obra_Exterior/OE-01_Exterior.dwg"
+        "01_Planos_Generales",
+        "02_Albañilerias",
+        "03_Acabados",
+        "04_Carpinterias",
+        "05_Herrerias",
+        "06_Cancelerias",
+        "07_Obra_Exterior"
     ],
     "03_Ejecutivo_Estructural": [
-        "EST_01_Cortes_por_Fachada/EST-01.dwg",
-        "EST_02_Planta_de_Cimentacion/EST-02_Cimentacion.dwg",
-        "EST_03_Estructura/EST-04_Estructura.dwg",
-        "EST_04_Losas/EST-05_Losas.dwg"
+        "01_Memorias_Calculo",
+        "02_Cimentacion",
+        "03_Estructura_Principal",
+        "04_Losas_y_Entrepisos",
+        "05_Detalles_Estructurales"
     ],
     "04_Ejecutivo_Instalaciones": [
-        "ELE-01_Plantas_Electrico.dwg",
-        "ELE-02_Cuadro_Cargas.dwg",
-        "IH-01_Instalaciones_Hidraulicas.dwg",
-        "ISP-01_Sanitarias_Pluviales.dwg",
-        "VYD-01_Instalacion_VozDatos.dwg",
-        "AMB-01_Inventario_Vegetacion.dwg",
-        "AMB-02_Impacto_Ambiental.docx"
+        "01_Electrico/Memorias",
+        "01_Electrico/Planos",
+        "02_Hidrosanitario/Memorias",
+        "02_Hidrosanitario/Planos",
+        "03_Voz_y_Datos",
+        "04_Aire_Acondicionado",
+        "05_Especiales"
     ],
-    "05_Costos": [
+    "05_Costos_y_Presupuestos": [
         "01_Fichas_Tecnicas",
-        "02_Generadores/Generadores_Base.xlsx",
-        "03_Presupuesto_Final"
+        "02_Cotizaciones_Proveedores",
+        "03_Generadores_Obra",
+        "04_Analisis_Precios_Unitarios"
     ],
-    "06_Renders": [
-        "01_Historial",
-        "02_Finales"
+    "06_Visualizacion": [
+        "01_Modelo_3D",
+        "02_Renders_Proceso",
+        "03_Renders_Finales",
+        "04_Recorrido_Virtual"
+    ],
+    "07_Legal_y_Permisos": [
+        "01_Escrituras",
+        "02_Licencia_Construccion",
+        "03_Contratos"
     ]
+};
+
+export const getDynamicStructure = (context: string) => {
+    // Deep copy to avoid mutating the master
+    const structure: any = JSON.parse(JSON.stringify(MASTER_STRUCTURE));
+    const ctx = context.toLowerCase();
+
+    // LOGIC: OBRA PUBLICA
+    if (ctx.includes('publica') || ctx.includes('gobierno') || ctx.includes('licitacion')) {
+        structure["00_Insumos"].push("03_Bases_Licitacion");
+        structure["00_Insumos"].push("04_Junta_Aclaraciones");
+        structure["07_Legal_y_Permisos"].push("04_Bitacora_Obra_Publica");
+        structure["07_Legal_y_Permisos"].push("05_Acta_Entrega_Recepcion");
+        
+        // Add specific folder for reports
+        structure["08_Reportes_Dependencia"] = [
+            "01_Estimaciones",
+            "02_Reporte_Fotografico",
+            "03_Notas_Bitacora"
+        ];
+    }
+
+    // LOGIC: REMODELACION / INTERIORES
+    if (ctx.includes('remodelacion') || ctx.includes('interior') || ctx.includes('remodelación')) {
+        // En remodelación, la estructura pesada a veces no aplica igual, pero el levantamiento es critico
+        structure["01_Anteproyecto"].push("00_Estado_Actual_Fotografico");
+        structure["01_Anteproyecto"].push("01_Levantamiento_Critico_Instalaciones");
+        
+        // Remove Despalme logic folder conceptually (though keep generic structural folder)
+        structure["02_Ejecutivo_Arquitectonico"].push("08_Desmontajes_y_Demoliciones");
+    }
+
+    return structure;
 };
